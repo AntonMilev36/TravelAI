@@ -1,5 +1,6 @@
 import os
 import uuid
+from typing import Any
 
 from dotenv import load_dotenv
 from langchain.chains import create_retrieval_chain
@@ -8,29 +9,32 @@ from langchain.chains.history_aware_retriever import create_history_aware_retrie
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_chroma import Chroma
 from langchain_community.document_loaders import WebBaseLoader
+from langchain_core.documents import Document
 from langchain_core.messages import AIMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import Runnable
 from langchain_core.tools import Tool
+from langchain_core.vectorstores import VectorStoreRetriever
 from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 from langgraph.checkpoint.postgres import PostgresSaver
+from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import create_react_agent
 from psycopg_pool import ConnectionPool
 
 load_dotenv()
 
-LLM_MODEL = "gemini-2.5-flash"
-EMBEDDING_MODEL = "gemini-embedding-001"
-BUS_STOPS_URL = ("https://pirdop.wordpress.com/%D1%80%D0%B0%D0%B7%D0%BF%D0%B8%D1%81%D0%B0%D0%BD%D0%B8%D0%B5"
+LLM_MODEL: str = "gemini-2.5-flash"
+EMBEDDING_MODEL: str = "gemini-embedding-001"
+BUS_STOPS_URL: str = ("https://pirdop.wordpress.com/%D1%80%D0%B0%D0%B7%D0%BF%D0%B8%D1%81%D0%B0%D0%BD%D0%B8%D0%B5"
                  "-%D0%BD%D0%B0-%D0%B0%D0%B2%D1%82%D0%BE%D0%B1%D1%83%D1%81%D0%B8/")
 
 
 def create_database():
-    pg_user = os.getenv("PG_USER")
-    pg_password = os.getenv("PG_PASS")
-    pg_host = os.getenv("PG_HOST")
-    pg_port = os.getenv("PG_PORT")
-    db_name = os.getenv("DB_NAME")
+    pg_user: str = os.getenv("PG_USER")
+    pg_password: str = os.getenv("PG_PASS")
+    pg_host: str = os.getenv("PG_HOST")
+    pg_port: str = os.getenv("PG_PORT")
+    db_name: str = os.getenv("DB_NAME")
 
     pool = ConnectionPool(
         conninfo=f"postgresql://{pg_user}:{pg_password}@{pg_host}:{pg_port}/{db_name}",
@@ -45,15 +49,15 @@ def create_database():
 
 
 def get_web_docs(url):
-    loader = WebBaseLoader(url)
-    docs = loader.load()
+    loader: WebBaseLoader = WebBaseLoader(url)
+    docs: list[Document] = loader.load()
 
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=2000,
         chunk_overlap=250
     )
 
-    split_docs = splitter.split_documents(docs)
+    split_docs: list[Document] = splitter.split_documents(docs)
 
     return split_docs
 
@@ -75,8 +79,8 @@ def define_model():
     return llm, prompt
 
 
-def create_chain(llm, prompt):
-    chain = create_stuff_documents_chain(
+def create_chain(llm: ChatGoogleGenerativeAI, prompt: ChatPromptTemplate):
+    chain: Runnable = create_stuff_documents_chain(
         llm=llm,
         prompt=prompt,
     )
@@ -84,7 +88,7 @@ def create_chain(llm, prompt):
     return chain
 
 
-def create_vector_db(docs):
+def create_vector_db(docs: list[Document]):
     embedding = GoogleGenerativeAIEmbeddings(
         model=EMBEDDING_MODEL,
         google_api_key=os.getenv("GOOGLE_API_KEY")
@@ -92,15 +96,16 @@ def create_vector_db(docs):
 
     vector_store = Chroma.from_documents(
         embedding=embedding,
-        documents=docs
+        documents=docs,
+        persist_directory=os.getenv("CHROMA_PATH"),
     )
 
     return vector_store
 
 
-def create_retriever(llm, prompt, chain, vector_store):
-    retriever = vector_store.as_retriever()
-    history_retriever = create_history_aware_retriever(
+def create_retriever(llm: ChatGoogleGenerativeAI, prompt: ChatPromptTemplate, chain: Runnable, vector_store: Chroma):
+    retriever: VectorStoreRetriever = vector_store.as_retriever()
+    history_retriever: Runnable = create_history_aware_retriever(
         llm=llm,
         prompt=prompt,
         retriever=retriever
@@ -114,7 +119,10 @@ def create_retriever(llm, prompt, chain, vector_store):
     return retrieval_chain
 
 
-def define_tool_agent(retrieval_chain, llm):
+def define_tool_agent(retrieval_chain: Runnable, llm: ChatGoogleGenerativeAI):
+    memory: PostgresSaver
+    pool: ConnectionPool
+
     memory, pool = create_database()
     memory.setup()
 
@@ -127,7 +135,7 @@ def define_tool_agent(retrieval_chain, llm):
         else:
             agent_input = str(query)
 
-        result = retrieval_chain.invoke({"input": agent_input})
+        result: Any = retrieval_chain.invoke({"input": agent_input})
         return result["answer"]
 
     retrieval_tool = Tool(
@@ -137,7 +145,7 @@ def define_tool_agent(retrieval_chain, llm):
                     "bus and train schedules, stops, and times from the uploaded documents."
     )
 
-    agent = create_react_agent(
+    agent: CompiledStateGraph = create_react_agent(
         model=llm,
         tools=[retrieval_tool],
         checkpointer=memory
@@ -147,36 +155,41 @@ def define_tool_agent(retrieval_chain, llm):
 
 
 if __name__ == "__main__":
-    urls = get_web_docs(BUS_STOPS_URL)
+    model: ChatGoogleGenerativeAI
+    model_prompt: ChatPromptTemplate
+    model_agent: CompiledStateGraph
+    model_pool: ConnectionPool
+
+    urls: list[Document] = get_web_docs(BUS_STOPS_URL)
     model, model_prompt = define_model()
-    model_chain = create_chain(model, model_prompt)
-    vector_db = create_vector_db(urls)
-    model_retriever = create_retriever(model, model_prompt, model_chain, vector_db)
+    model_chain: Runnable = create_chain(model, model_prompt)
+    vector_db: Chroma = create_vector_db(urls)
+    model_retriever: Runnable = create_retriever(model, model_prompt, model_chain, vector_db)
     model_agent, model_pool = define_tool_agent(model_retriever, model)
     thread_id: str = str(uuid.uuid4())
     previous_chat: str | None = input("Enter thread id, if you want new chat, press Enter: ")
 
     while True:
-        user_input = input("Your message: ")
+        user_input: str = input("Your message: ")
 
         if user_input == "exit":
             model_pool.close()
             break
 
         # This ensures model memory in a sertan conversation
-        config: dict[str, dict] = {"configurable": {"thread_id": previous_chat if not None else thread_id}}
+        config: dict[str, dict] = {"configurable": {"thread_id": previous_chat if previous_chat else thread_id}}
 
         # By documentation the agent has to be runed like this. Ignore this warning
-        response = model_agent.invoke(
+        response: dict[str, list] = model_agent.invoke(
             {
                 "messages": [{"role": "user", "content": user_input}]
             }, config
         )
 
         # Getting only the answer from the agent
-        messages = response.get("messages", [])
+        messages: list = response.get("messages", [])
 
-        last_ai_message = next(
+        last_ai_message: AIMessage = next(
             (msg for msg in reversed(messages) if isinstance(msg, AIMessage)),
             None
         )
