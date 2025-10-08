@@ -6,11 +6,12 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions
 from selenium.webdriver.support.wait import WebDriverWait
 
-options = Options()
 
-driver = webdriver.Chrome(options=options)
+def get_train_url(start, end, date):
+    options = Options()
 
-def get_train_url():
+    driver = webdriver.Chrome(options=options)
+
     try:
         driver.get("https://www.bdz.bg/bg")
 
@@ -28,8 +29,10 @@ def get_train_url():
         to_station = driver.find_element(By.NAME, "to")
 
         from_station.clear()
-        from_station.send_keys("ПИРДОП")
-        to_station.send_keys("БУРГАС")
+        from_station.send_keys(start)
+        to_station.send_keys(end)
+        # Sleep to see if the provided values are correct
+        time.sleep(5)
 
         button = WebDriverWait(driver, 10).until(
             expected_conditions.element_to_be_clickable((By.CSS_SELECTOR, ".btn.btn-primary.btn-sm.px-3.search-submit"))
@@ -43,8 +46,10 @@ def get_train_url():
             try:
                 driver.execute_script("arguments[0].scrollIntoView(true);", el)
                 driver.execute_script("arguments[0].click();", el)
-            except Exception as e:
+            except Exception:
                 print("Mission kaput")
     finally:
+        curr_url = driver.current_url
+        a = 5
         driver.close()
-        return driver.current_url
+        return f"{curr_url}/{date}"

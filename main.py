@@ -12,7 +12,6 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_chroma import Chroma
 from langchain_community.document_loaders import WebBaseLoader
 from langchain_core.documents import Document
-from langchain_core.messages import AIMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import Runnable
 from langchain_core.tools import Tool
@@ -89,32 +88,6 @@ def save_docs(documents: list[Document]):
     session.commit()
 
 
-def define_model():
-    llm = ChatGoogleGenerativeAI(
-        model=LLM_MODEL,
-        api_key=os.getenv("GOOGLE_API_KEY"),
-        temperature=0.3
-    )
-
-    prompt = ChatPromptTemplate.from_messages(
-        [
-            ("system", "Answer to user questions and using this context if it is needed: {context}"),
-            ("human", "{input}")
-        ]
-    )
-
-    return llm, prompt
-
-
-def create_chain(llm: ChatGoogleGenerativeAI, prompt: ChatPromptTemplate):
-    chain: Runnable = create_stuff_documents_chain(
-        llm=llm,
-        prompt=prompt,
-    )
-
-    return chain
-
-
 def create_vector_db(documents):
     embedding = GoogleGenerativeAIEmbeddings(
         model=EMBEDDING_MODEL,
@@ -132,18 +105,46 @@ def create_vector_db(documents):
     for document in documents:
         split_docs: list[Document] = splitter.split_documents([document])
         for i, chunk in enumerate(split_docs):
-            chunk_id = f"{document.id}-{i}"
+            chunk_id = f"{document.id}-{str(uuid.uuid4())[:4]}"
             chunk_ids.append(chunk_id)
             chunked_docs.append(chunk)
 
     vector_store = Chroma.from_documents(
         embedding=embedding,
         documents=chunked_docs,
-        persist_directory=os.getenv("CHROMA_PATH"),
-        ids=chunk_ids
+        # persist_directory=os.getenv("CHROMA_PATH"),
+        # ids=chunk_ids
     )
 
     return vector_store
+
+
+def define_model():
+    llm = ChatGoogleGenerativeAI(
+        model=LLM_MODEL,
+        api_key=os.getenv("GOOGLE_API_KEY"),
+        temperature=0.3
+    )
+
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            ("system", "Answer to user questions using this context if it is needed {context}. "
+                       "Your main go is to give travel information"
+                       "You can use you own knowledge if the context is not helpful"),
+            ("human", "{input}")
+        ]
+    )
+
+    return llm, prompt
+
+
+def create_chain(llm: ChatGoogleGenerativeAI, prompt: ChatPromptTemplate):
+    chain: Runnable = create_stuff_documents_chain(
+        llm=llm,
+        prompt=prompt,
+    )
+
+    return chain
 
 
 def create_retriever(llm: ChatGoogleGenerativeAI, prompt: ChatPromptTemplate, chain: Runnable, vector_store: Chroma):
@@ -160,7 +161,6 @@ def create_retriever(llm: ChatGoogleGenerativeAI, prompt: ChatPromptTemplate, ch
     )
 
     return retrieval_chain
-
 
 def define_tool_agent(retrieval_chain: Runnable, llm: ChatGoogleGenerativeAI):
     memory: PostgresSaver
@@ -185,7 +185,7 @@ def define_tool_agent(retrieval_chain: Runnable, llm: ChatGoogleGenerativeAI):
         name="DocTool",
         func=run_retrieval,
         description="Use this tool to answer questions about "
-                    "bus and train schedules, stops, and times from the uploaded documents."
+                    "bus and train schedules, stops, and times."
     )
 
     agent: CompiledStateGraph = create_react_agent(
@@ -195,51 +195,3 @@ def define_tool_agent(retrieval_chain: Runnable, llm: ChatGoogleGenerativeAI):
     )
 
     return agent, pool
-
-
-if __name__ == "__main__":
-    model: ChatGoogleGenerativeAI
-    model_prompt: ChatPromptTemplate
-    model_agent: CompiledStateGraph
-    model_pool: ConnectionPool
-
-    docs = get_web_docs(BUS_STOPS_URL)
-    model, model_prompt = define_model()
-    model_chain: Runnable = create_chain(model, model_prompt)
-    vector_db: Chroma = create_vector_db(docs)
-    model_retriever: Runnable = create_retriever(model, model_prompt, model_chain, vector_db)
-    model_agent, model_pool = define_tool_agent(model_retriever, model)
-    thread_id: str = str(uuid.uuid4())
-    previous_chat: str | None = input("Enter thread id, if you want new chat, press Enter: ")
-
-    save_docs(docs)
-
-    while True:
-        user_input: str = input("Your message: ")
-
-        if user_input == "exit":
-            model_pool.close()
-            break
-
-        # This ensures model memory in a sertan conversation
-        config: dict[str, dict] = {"configurable": {"thread_id": previous_chat if previous_chat else thread_id}}
-
-        # By documentation the agent has to be runed like this. Ignore this warning
-        response: dict[str, list] = model_agent.invoke(
-            {
-                "messages": [{"role": "user", "content": user_input}]
-            }, config
-        )
-
-        # Getting only the answer from the agent
-        messages: list = response.get("messages", [])
-
-        last_ai_message: AIMessage = next(
-            (msg for msg in reversed(messages) if isinstance(msg, AIMessage)),
-            None
-        )
-
-        if last_ai_message:
-            print("Answer:", last_ai_message.content)
-        else:
-            print("No assistant response found")

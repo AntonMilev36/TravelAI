@@ -182,6 +182,7 @@ dmypy.json
 cython_debug/
 
 # Personal ignores
+test.py
 chroma_db/
 
 # PyCharm
